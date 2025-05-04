@@ -1,24 +1,39 @@
 #!/usr/bin/env python3
+# update_number.py
+# This script increments a number, commits and pushes to GitHub,
+# then reschedules itself once per day to run a weighted-random number (0–5) of times today.
+
 import os
 import random
 import subprocess
 from datetime import datetime
 
+# Determine the directory where this script resides
 script_dir = os.path.dirname(os.path.abspath(__file__))
+# Change working directory to the script directory
 os.chdir(script_dir)
 
 
 def read_number():
+    """
+    Read the current integer value from number.txt.
+    """
     with open("number.txt", "r") as f:
         return int(f.read().strip())
 
 
 def write_number(num):
+    """
+    Write the integer `num` to number.txt.
+    """
     with open("number.txt", "w") as f:
         f.write(str(num))
 
 
 def generate_random_commit_message():
+    """
+    Use an LLM to generate a Conventional Commits–style message.
+    """
     from transformers import pipeline
 
     generator = pipeline(
@@ -26,27 +41,21 @@ def generate_random_commit_message():
         model="openai-community/gpt2",
     )
     prompt = """
-        Generate a Git commit message following the Conventional Commits standard. The message should include a type, an optional scope, and a subject.Please keep it short. Here are some examples:
-
-        - feat(auth): add user authentication module
-        - fix(api): resolve null pointer exception in user endpoint
-        - docs(readme): update installation instructions
-        - chore(deps): upgrade lodash to version 4.17.21
-        - refactor(utils): simplify date formatting logic
-
-        Now, generate a new commit message:
-    """
+        Generate a Git commit message following the Conventional Commits standard.
+        The message should include a type, an optional scope, and a subject. Please keep it short.
+        """
     generated = generator(
         prompt,
         max_new_tokens=50,
         num_return_sequences=1,
-        temperature=0.9,  # Slightly higher for creativity
-        top_k=50,  # Limits sampling to top 50 logits
-        top_p=0.9,  # Nucleus sampling for diversity
+        temperature=0.9,
+        top_k=50,
+        top_p=0.9,
         truncation=True,
     )
     text = generated[0]["generated_text"]
 
+    # Extract the text after the last bullet
     if "- " in text:
         return text.rsplit("- ", 1)[-1].strip()
     else:
@@ -54,9 +63,10 @@ def generate_random_commit_message():
 
 
 def git_commit():
-    # Stage the changes
+    """
+    Stage number.txt and commit with either a random LLM-generated message or today’s date.
+    """
     subprocess.run(["git", "add", "number.txt"])
-    # Create commit with current date
     if "FANCY_JOB_USE_LLM" in os.environ:
         commit_message = generate_random_commit_message()
     else:
@@ -66,7 +76,9 @@ def git_commit():
 
 
 def git_push():
-    # Push the committed changes to GitHub
+    """
+    Push committed changes to GitHub, and report success or error.
+    """
     result = subprocess.run(["git", "push"], capture_output=True, text=True)
     if result.returncode == 0:
         print("Changes pushed to GitHub successfully.")
@@ -75,49 +87,83 @@ def git_push():
         print(result.stderr)
 
 
-def update_cron_with_random_time():
-    # Generate random hour (0-23) and minute (0-59)
-    random_hour = random.randint(0, 23)
-    random_minute = random.randint(0, 59)
-
-    # Define the new cron job command
-    new_cron_command = f"{random_minute} {random_hour} * * * cd {script_dir} && python3 {os.path.join(script_dir, 'update_number.py')}\n"
-
-    # Get the current crontab
+def update_cron_random_times():
+    """
+    Once per day, reschedule this script to run a weighted-random number of times (0–5) today.
+    This guard ensures existing schedules for the day aren't overwritten by subsequent runs.
+    """
     cron_file = "/tmp/current_cron"
-    os.system(
-        f"crontab -l > {cron_file} 2>/dev/null || true"
-    )  # Save current crontab, or create a new one if empty
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    schedule_marker = os.path.join(script_dir, "cron_schedule_date.txt")
 
-    # Update the crontab file
-    with open(cron_file, "r") as file:
-        lines = file.readlines()
+    # If we've already scheduled today, skip rescheduling
+    if os.path.exists(schedule_marker):
+        with open(schedule_marker, "r") as f:
+            if f.read().strip() == today_str:
+                print("Cron already scheduled for today. Skipping.")
+                return
 
-    with open(cron_file, "w") as file:
-        for line in lines:
-            # Remove existing entry for `update_number.py` if it exists
-            if "update_number.py" not in line:
-                file.write(line)
-        # Add the new cron job at the random time
-        file.write(new_cron_command)
+    # Dump existing crontab to temp file (or create empty)
+    os.system(f"crontab -l > {cron_file} 2>/dev/null || true")
 
-    # Load the updated crontab
+    # Read and filter out old entries for this script
+    with open(cron_file, "r") as f:
+        existing = [ln for ln in f if "update_number.py" not in ln]
+
+    # Define percentage weights for run counts 0 through 5
+    PROB_WEIGHTS = [15, 20, 25, 20, 10, 10]
+    # Select run_count based on weighted probabilities
+    run_count = random.choices(range(len(PROB_WEIGHTS)), weights=PROB_WEIGHTS, k=1)[0]
+
+    # Generate unique (hour, minute) pairs for run_count
+    times = set()
+    while len(times) < run_count:
+        h = random.randint(0, 23)
+        m = random.randint(0, 59)
+        times.add((h, m))
+
+    # Build new cron lines with logging
+    log_file = os.path.join(script_dir, "cron_update.log")
+    new_lines = []
+    for h, m in sorted(times):
+        new_lines.append(
+            f"{m} {h} * * * cd {script_dir} && "
+            f"/usr/bin/env python3 {os.path.join(script_dir, 'update_number.py')} "
+            f">> {log_file} 2>&1\n"
+        )
+
+    # Write back the filtered lines plus new entries
+    with open(cron_file, "w") as f:
+        f.writelines(existing)
+        f.writelines(new_lines)
+
+    # Install the updated crontab
     os.system(f"crontab {cron_file}")
     os.remove(cron_file)
 
-    print(f"Cron job updated to run at {random_hour}:{random_minute} tomorrow.")
+    # Mark scheduling done for today
+    with open(schedule_marker, "w") as f:
+        f.write(today_str)
+
+    print(f"Scheduled {run_count} run(s) today at: {sorted(times)}")
 
 
 def main():
+    """
+    Main workflow:
+    1. Read and increment the number
+    2. Commit & push to GitHub
+    3. Reschedule cron jobs once per day
+    """
     try:
         current_number = read_number()
         new_number = current_number + 1
         write_number(new_number)
         git_commit()
         git_push()
-        update_cron_with_random_time()
+        update_cron_random_times()
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error: {e}")
         exit(1)
 
 
