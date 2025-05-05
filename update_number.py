@@ -110,17 +110,19 @@ def update_cron_random_times():
     with open(cron_file, "r") as f:
         existing = [ln for ln in f if "update_number.py" not in ln]
 
-    # Define percentage weights for run counts 0 through 5
-    PROB_WEIGHTS = [15, 20, 25, 20, 10, 10]
+    # Define percentage weights for run counts 0 through 9 (higher counts less likely)
+    PROB_WEIGHTS = [15, 25, 15, 10, 9, 8, 7, 5, 3, 3]
     # Select run_count based on weighted probabilities
     run_count = random.choices(range(len(PROB_WEIGHTS)), weights=PROB_WEIGHTS, k=1)[0]
 
     # Generate unique (hour, minute) pairs for run_count
+    n=0
     times = set()
     while len(times) < run_count:
         h = random.randint(0, 23)
         m = random.randint(0, 59)
         times.add((h, m))
+        n+=1
 
     # Build new cron lines with logging
     log_file = os.path.join(script_dir, "cron_update.log")
@@ -146,6 +148,11 @@ def update_cron_random_times():
         f.write(today_str)
 
     print(f"Scheduled {run_count} run(s) today at: {sorted(times)}")
+    # Get current local date & time
+    now = datetime.now()
+
+    # Print full datetime
+    print(now.strftime("%Y-%m-%d %H:%M:%S")) 
 
 
 def main():
