@@ -121,15 +121,18 @@ def update_cron_random_times():
         existing.append(ln)
 
     # Weighted probabilities for selecting 0–9 runs
-    PROB_WEIGHTS = [15, 25, 15, 10, 9, 8, 7, 5, 3, 3]
+    PROB_WEIGHTS = [13, 15, 17, 4, 11, 9, 8, 6, 5, 12]
     #run_count = 8
     run_count = random.choices(range(len(PROB_WEIGHTS)), weights=PROB_WEIGHTS, k=1)[0]
     
     
     # Generate unique (hour,minute) tuples
     times = set()
+    hours = list(range(0, 2)) + list(range(6, 24))
     while len(times) < run_count:
-        times.add((random.randint(0,23), random.randint(0,59)))
+        h = random.choice(hours)
+        m = random.randint(0, 59)
+        times.add((h, m))
 
     # Append new RANDOM cron entries
     for h, m in sorted(times):
